@@ -1,3 +1,3 @@
 **Notes:**
-- Most datasets are provided in `.csv` format. Due to size constraints, three datasets (BPIC12, BPIC17 and BPIC19) are provided as compressed `.zip` files.
+- Datasets in this folder are provided either as `.csv` files, or as compressed `.zip` archives for larger datasets due to size constraints.
 - The pipeline will automatically extract these `.zip` files when needed.
