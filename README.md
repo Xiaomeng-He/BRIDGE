@@ -11,7 +11,7 @@ The repository includes the following materials:
 - **`Reimplementations`**:  Code reimplementing suffix prediction models from prior work.
 
 - **`Supplementary Materials`**:  Supplementary materials, including:
-  - an analysis comparing the performance of **BRIDGE** with a re-ranking method that samples 50 suffixes and ranks them by likelihood
+  - an analysis comparing the performance of **BRIDGE** with a re-ranking method that samples 50 suffixes and ranks them by likelihood ([link](<Supplementary Materials/BRIDGE vs Likelihood-Based Re-rank.md>))
   - detailed result tables (including means and standard deviations) comparing **BRIDGE** with four baseline decoding strategies
   - detailed result tables (including means and standard deviations) comparing **BRIDGE** (LSTM-based) with other suffix prediction models
 
