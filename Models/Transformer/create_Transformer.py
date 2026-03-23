@@ -523,8 +523,8 @@ class ED_Transformer(nn.Module):
             n_candidate,
             n_sample,
             sampling='random',
-            top_k=10,
-            top_p=0.9,
+            k=10,
+            p=0.9,
             diff=False):
         """
         BRIDGE with Monte Carlo estimator
@@ -539,7 +539,7 @@ class ED_Transformer(nn.Module):
         enc_input, enc_padding_mask = self.process_enc_input(cate_prefix, nume_prefix) 
         enc_outputs = self.encoder(enc_input, enc_padding_mask)
 
-        def generate_samples(n):
+        def generate_samples(n, sampling_mode):
 
             predictions = torch.empty((batch_size * n, self.suffix_len), 
                               dtype=torch.long, 
@@ -564,25 +564,24 @@ class ED_Transformer(nn.Module):
                 logits = logits.clone()
                 logits[:, [0, 2]] = float('-inf')
 
-                if sampling == "random":
+                if sampling_mode == "random":
                     return logits
 
-                if sampling == "top_k":
-                    k = min(top_k, V)
+                if sampling_mode == "top_k":
+                    k = min(k, V)
                     top_k_logits, top_k_indices = torch.topk(logits, k, dim=-1)
                     filtered = torch.full_like(logits, float('-inf'))
                     filtered.scatter_(1, top_k_indices, top_k_logits)
                     return filtered
 
-                if sampling == "top_p":
-    
+                if sampling_mode == "top_p":
                     probs = F.softmax(logits, dim=-1)  # (BN, V)
                     sorted_probs, sorted_idx = torch.sort(probs, descending=True, dim=-1)
                     cum_probs = torch.cumsum(sorted_probs, dim=-1)
 
                     # tokens to remove: those after the cutoff
                     # keep at least 1 token
-                    remove = cum_probs > top_p
+                    remove = cum_probs > p
                     # shift right so the first token that makes cum_probs>p is kept
                     remove[:, 1:] = remove[:, :-1].clone()
                     remove[:, 0] = False
@@ -593,7 +592,7 @@ class ED_Transformer(nn.Module):
                     filtered = logits.masked_fill(~keep_vocab, float('-inf'))
                     return filtered
 
-                raise ValueError(f"Unknown sampling mode: {sampling}")
+                raise ValueError(f"Unknown sampling mode: {sampling_mode}")
 
             for t in range(self.suffix_len):
 
@@ -631,11 +630,11 @@ class ED_Transformer(nn.Module):
             return predictions
         
         if diff:
-            candidates = generate_samples(n_candidate)
-            samples = generate_samples(n_sample)
+            candidates = generate_samples(n_candidate, sampling_mode=sampling)
+            samples = generate_samples(n_sample, sampling_mode='random')
         else:
             assert n_candidate == n_sample, "Error: n_candidate is different from n_sample"
-            samples = generate_samples(n_sample)
+            samples = generate_samples(n_sample, sampling_mode='random')
             candidates = samples.clone()
 
         lens_sample = lens_till_eoc(samples, self.eoc_index)
@@ -692,8 +691,8 @@ class ED_Transformer(nn.Module):
             n_candidate,
             n_sample,
             sampling='random',
-            top_k=10,
-            top_p=0.9,
+            k=10,
+            p=0.9,
             length_norm=False,
             diff=False):
         """
@@ -709,7 +708,7 @@ class ED_Transformer(nn.Module):
         enc_input, enc_padding_mask = self.process_enc_input(cate_prefix, nume_prefix) 
         enc_outputs = self.encoder(enc_input, enc_padding_mask)
 
-        def generate_samples(n):
+        def generate_samples(n, sampling_mode):
 
             predictions = torch.empty((batch_size * n, self.suffix_len), 
                               dtype=torch.long, 
@@ -739,22 +738,22 @@ class ED_Transformer(nn.Module):
                 logits = logits.clone()
                 logits[:, [0, 2]] = float('-inf')
 
-                if sampling == "random":
+                if sampling_mode == "random":
                     return logits
 
-                if sampling == "top_k":
-                    k = min(top_k, V)
+                if sampling_mode == "top_k":
+                    k = min(k, V)
                     top_k_logits, top_k_indices = torch.topk(logits, k, dim=-1)
                     filtered = torch.full_like(logits, float('-inf'))
                     filtered.scatter_(1, top_k_indices, top_k_logits)
                     return filtered
 
-                if sampling == "top_p":
+                if sampling_mode == "top_p":
                     probs = F.softmax(logits, dim=-1) 
                     sorted_probs, sorted_idx = torch.sort(probs, descending=True, dim=-1)
                     cum_probs = torch.cumsum(sorted_probs, dim=-1)
 
-                    remove = cum_probs > top_p
+                    remove = cum_probs > p
                     remove[:, 1:] = remove[:, :-1].clone()
                     remove[:, 0] = False
 
@@ -764,7 +763,7 @@ class ED_Transformer(nn.Module):
                     filtered = logits.masked_fill(~keep_vocab, float('-inf'))
                     return filtered
 
-                raise ValueError(f"Unknown sampling mode: {sampling}")
+                raise ValueError(f"Unknown sampling mode: {sampling_mode}")
     
             for t in range(self.suffix_len):
 
@@ -809,11 +808,11 @@ class ED_Transformer(nn.Module):
             return predictions, logprobs
         
         if diff:
-            candidates, _ = generate_samples(n_candidate)
-            samples, logprobs = generate_samples(n_sample)
+            candidates, _ = generate_samples(n_candidate, sampling_mode=sampling)
+            samples, logprobs = generate_samples(n_sample, sampling_mode='random')
         else:
             assert n_candidate == n_sample, "Error: n_candidate is different from n_sample"
-            samples, logprobs = generate_samples(n_sample)
+            samples, logprobs = generate_samples(n_sample, sampling_mode='random')
             candidates = samples.clone()
 
         cand_3d = candidates.view(batch_size, n_candidate, self.suffix_len)
