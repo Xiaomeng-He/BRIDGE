@@ -39,12 +39,26 @@ Choose the method according to the estimator you want to use. Both methods share
 
 - **Sampling method (`sampling`)**: controls how suffixes in candidate set are generated.  
   - `random` (default; used in the paper)  
-  - `top-k` (if `top-k` is used, specify the value of `k` using `k=...`.)  
-  - `top-p` (if `top-p` is used, specify the value of `p` using `p=...`.)
+  - `top-k` (if `top-k` is used, specify the value of `k` using `k=...`)  
+  - `top-p` (if `top-p` is used, specify the value of `p` using `p=...`)
 
 The model-based method **`mb_bridge(...)`** also includes:
 
 - **Length normalization (`length_norm`)**:
   - `False` (default; used in the paper): disable length normalization  
   - `True`: enable length normalization
+
+## Reimplemented Suffix Prediction Models
   
+The following table lists the reimplemented suffix prediction models, with the code locations in this repository and links to the original papers and repositories.
+
+| | Folder Name | Paper | Original Repository |
+|------:|-------------|------------|-----------|
+| 1 | BEST           | [Rauch et al., 2025](https://link.springer.com/chapter/10.1007/978-3-032-02867-9_25) | [Code](https://github.com/lmu-dbs/BEST) |
+| 2 | ProcessLSTM    | [Tax et al., 2017](https://link.springer.com/chapter/10.1007/978-3-319-59536-8_30) | [Code](https://github.com/verenich/ProcessSequencePrediction) |
+| 3 | AccurateLSTM   | [Camargo et al., 2019](https://link.springer.com/chapter/10.1007/978-3-030-26619-6_19) | [Code](https://github.com/AdaptiveBProcess/GenerativeLSTM) |
+| 4 | CRTP           | [Gunnarsson et al., 2023](https://ieeexplore.ieee.org/document/10045798) | [Code](https://github.com/bjornragu/CRTP-LSTM) |
+| 5 | SuTraN         | [Wuyts et al., 2024](https://ieeexplore.ieee.org/document/10680671) | [Code](https://github.com/BrechtWts/SuffixTransformerNetwork) |
+| 6 | DOGE           | [Rama-Maneiro et al., 2024](https://link.springer.com/chapter/10.1007/978-3-031-61057-8_13) | [Code](https://gitlab.citius.gal/efren.rama/rl-ppm)* |
+
+\* The paper does not provide a link to an official repository. We therefore rely on a repository released by the author and reimplement the model based on that repository and the description in the paper.
