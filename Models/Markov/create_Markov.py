@@ -291,8 +291,8 @@ class MarkovModel:
         n_candidate,
         n_sample,
         sampling='random',
-        top_k=10,
-        top_p=0.9,
+        k=10,
+        p=0.9,
         diff=False,
         eoc_id=int(3),
         banned_ids=(0, 2),
@@ -312,43 +312,7 @@ class MarkovModel:
 
         prefixes = prefixes.clone()
 
-        def filter_probs(probs: torch.Tensor) -> torch.Tensor:
-            p = probs.clone()
-
-            if banned_ids:
-                p[:, banned_ids] = 0.0
-
-            if sampling == "random":
-                denom = p.sum(dim=-1, keepdim=True).clamp_min(1e-12)
-                return p / denom
-
-            if sampling == "top_k":
-                k = min(int(top_k), V)
-                topv, topi = torch.topk(p, k, dim=-1)
-                out = torch.zeros_like(p)
-                out.scatter_(1, topi, topv)
-                out = out / out.sum(dim=-1, keepdim=True).clamp_min(1e-12)
-                return out
-
-            if sampling == "top_p":
-                p_thr = float(top_p)
-                sorted_p, sorted_i = torch.sort(p, descending=True, dim=-1)
-                cum = torch.cumsum(sorted_p, dim=-1)
-
-                remove = cum > p_thr
-                remove[:, 1:] = remove[:, :-1].clone()
-                remove[:, 0] = False
-
-                sorted_p = sorted_p.masked_fill(remove, 0.0)
-                sorted_p = sorted_p / sorted_p.sum(dim=-1, keepdim=True).clamp_min(1e-12)
-
-                out = torch.zeros_like(p)
-                out.scatter_(1, sorted_i, sorted_p)
-                return out
-
-            raise ValueError(f"Unknown sampling mode: {sampling}")
-
-        def generate_samples(n: int) -> torch.Tensor:
+        def generate_samples(n, sampling_mode):
             n = int(n)
 
             predictions = torch.empty((B * n, T), dtype=torch.long, device=device)
@@ -356,6 +320,42 @@ class MarkovModel:
             alive = torch.ones((B * n,), dtype=torch.bool, device=device)
 
             ctx = prefixes.to(torch.long).repeat_interleave(n, dim=0)
+
+            def filter_probs(probs):
+                p = probs.clone()
+
+                if banned_ids:
+                    p[:, banned_ids] = 0.0
+
+                if sampling_mode == "random":
+                    denom = p.sum(dim=-1, keepdim=True).clamp_min(1e-12)
+                    return p / denom
+
+                if sampling_mode == "top_k":
+                    k = min(int(k), V)
+                    topv, topi = torch.topk(p, k, dim=-1)
+                    out = torch.zeros_like(p)
+                    out.scatter_(1, topi, topv)
+                    out = out / out.sum(dim=-1, keepdim=True).clamp_min(1e-12)
+                    return out
+
+                if sampling_mode == "top_p":
+                    p_thr = float(p)
+                    sorted_p, sorted_i = torch.sort(p, descending=True, dim=-1)
+                    cum = torch.cumsum(sorted_p, dim=-1)
+
+                    remove = cum > p_thr
+                    remove[:, 1:] = remove[:, :-1].clone()
+                    remove[:, 0] = False
+
+                    sorted_p = sorted_p.masked_fill(remove, 0.0)
+                    sorted_p = sorted_p / sorted_p.sum(dim=-1, keepdim=True).clamp_min(1e-12)
+
+                    out = torch.zeros_like(p)
+                    out.scatter_(1, sorted_i, sorted_p)
+                    return out
+
+                raise ValueError(f"Unknown sampling mode: {sampling_mode}")
 
             for t in range(T):
                 base_probs = self.next_probs(ctx)  
@@ -379,11 +379,11 @@ class MarkovModel:
             return predictions
 
         if diff:
-            candidates = generate_samples(n_candidate) 
-            samples = generate_samples(n_sample) 
+            candidates = generate_samples(n_candidate, sampling_mode=sampling) 
+            samples = generate_samples(n_sample, sampling_mode='random') 
         else:
             assert n_candidate == n_sample, "Error: n_candidate is different from n_sample"
-            samples = generate_samples(n_sample)
+            samples = generate_samples(n_sample, sampling_mode='random')
             candidates = samples.clone()
         
         lens_sample = lens_till_eoc(samples, eoc_id)
@@ -447,8 +447,8 @@ class MarkovModel:
         n_candidate,
         n_sample,
         sampling = "random",
-        top_k = 10,
-        top_p = 0.9,
+        k = 10,
+        p = 0.9,
         length_norm = False,
         diff = False,
         eoc_id = 3,
@@ -469,44 +469,7 @@ class MarkovModel:
 
         prefixes = prefixes.clone()
 
-        def filter_probs(probs: torch.Tensor) -> torch.Tensor:
-        
-            p = probs.clone()
-
-            if banned_ids:
-                p[:, banned_ids] = 0.0
-
-            if sampling == "random":
-                denom = p.sum(dim=-1, keepdim=True).clamp_min(1e-12)
-                return p / denom
-
-            if sampling == "top_k":
-                k = min(int(top_k), V)
-                topv, topi = torch.topk(p, k, dim=-1)  # (BN,k)
-                out = torch.zeros_like(p)
-                out.scatter_(1, topi, topv)
-                out = out / out.sum(dim=-1, keepdim=True).clamp_min(1e-12)
-                return out
-
-            if sampling == "top_p":
-                p_thr = float(top_p)
-                sorted_p, sorted_i = torch.sort(p, descending=True, dim=-1)   # (BN,V)
-                cum = torch.cumsum(sorted_p, dim=-1)
-
-                remove = cum > p_thr
-                remove[:, 1:] = remove[:, :-1].clone()
-                remove[:, 0] = False
-
-                sorted_p = sorted_p.masked_fill(remove, 0.0)
-                sorted_p = sorted_p / sorted_p.sum(dim=-1, keepdim=True).clamp_min(1e-12)
-
-                out = torch.zeros_like(p)
-                out.scatter_(1, sorted_i, sorted_p)
-                return out
-
-            raise ValueError(f"Unknown sampling mode: {sampling}")
-
-        def generate_samples(n: int):
+        def generate_samples(n, sampling_mode):
     
             n = int(n)
             BN = B * n
@@ -516,6 +479,43 @@ class MarkovModel:
 
             alive = torch.ones((BN,), dtype=torch.bool, device=device)
             ctx = prefixes.to(torch.long).repeat_interleave(n, dim=0)
+
+            def filter_probs(probs: torch.Tensor) -> torch.Tensor:
+            
+                p = probs.clone()
+
+                if banned_ids:
+                    p[:, banned_ids] = 0.0
+
+                if sampling_mode == "random":
+                    denom = p.sum(dim=-1, keepdim=True).clamp_min(1e-12)
+                    return p / denom
+
+                if sampling_mode == "top_k":
+                    k = min(int(k), V)
+                    topv, topi = torch.topk(p, k, dim=-1)  # (BN,k)
+                    out = torch.zeros_like(p)
+                    out.scatter_(1, topi, topv)
+                    out = out / out.sum(dim=-1, keepdim=True).clamp_min(1e-12)
+                    return out
+
+                if sampling_mode == "top_p":
+                    p_thr = float(p)
+                    sorted_p, sorted_i = torch.sort(p, descending=True, dim=-1)   # (BN,V)
+                    cum = torch.cumsum(sorted_p, dim=-1)
+
+                    remove = cum > p_thr
+                    remove[:, 1:] = remove[:, :-1].clone()
+                    remove[:, 0] = False
+
+                    sorted_p = sorted_p.masked_fill(remove, 0.0)
+                    sorted_p = sorted_p / sorted_p.sum(dim=-1, keepdim=True).clamp_min(1e-12)
+
+                    out = torch.zeros_like(p)
+                    out.scatter_(1, sorted_i, sorted_p)
+                    return out
+
+                raise ValueError(f"Unknown sampling mode: {sampling_mode}")
 
             for t in range(T):
                 base_probs = self.next_probs(ctx)  
@@ -544,11 +544,11 @@ class MarkovModel:
             return predictions, logprobs
 
         if diff:
-            candidates, _ = generate_samples(n_candidate)
-            samples, logprobs = generate_samples(n_sample)
+            candidates, _ = generate_samples(n_candidate, sampling_mode=sampling)
+            samples, logprobs = generate_samples(n_sample, sampling_mode='random')
         else:
             assert n_candidate == n_sample, "Error: n_candidate is different from n_sample"
-            samples, logprobs = generate_samples(n_sample)
+            samples, logprobs = generate_samples(n_sample, sampling_mode='random')
             candidates = samples.clone()
 
         cand_3d = candidates.view(B, n_candidate, T)
