@@ -1,0 +1,19 @@
+exhaustive_config:
+  max_pattern_size_train: [21]
+  max_pattern_size_eval: [[3,5,7,11,17,21]]
+  process_stage_width_percentage: [0.00, 0.025, 0.10, 0.20, 0.50, 1.00]
+  min_freq: [0.000000000000001]
+  task: [['rtp']]
+  break_buffer: [1.2] # this terminates the sequence prediction if the predicted sequence length is higher than break_buffer*max_trace_len in the training set
+  filter_sequences: [True] # this filters the padded dummy activity tokens from the predicted sequences for evaluation
+  prune_func: [None]
+
+test_config:
+  max_pattern_size_train: [21]
+  max_pattern_size_eval: [[3,21]]
+  process_stage_width_percentage: [0.00]
+  min_freq: [0.000000000000001]
+  task: [['rtp']]
+  break_buffer: [1.2] # this terminates the sequence prediction if the predicted sequence length is higher than break_buffer*max_trace_len in the training set
+  filter_sequences: [True] # this filters the padded dummy activity tokens from the predicted sequences for evaluation
+  prune_func: [None]
