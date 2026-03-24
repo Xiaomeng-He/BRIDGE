@@ -188,6 +188,347 @@ class ED_Transformer(nn.Module):
 
         return x, dec_padding_mask, dec_causal_mask
 
+    def bridge(self,
+            cate_prefix,
+            nume_prefix,
+            dec_input_act,
+            n_candidate,
+            n_sample,
+            estimator,
+            sampling='random',
+            k=10,
+            p=0.9,
+            diff=False):
+        
+        device = cate_prefix.device
+        batch_size = cate_prefix.shape[0]
+        eoc_tensor = torch.tensor(self.eoc_index, device=device)
+
+        # -- encoder --
+        
+        enc_input, enc_padding_mask = self.process_enc_input(cate_prefix, nume_prefix) 
+        enc_outputs = self.encoder(enc_input, enc_padding_mask)
+
+        if estimator == 'MC':
+
+            def generate_samples(n, sampling_mode):
+
+                predictions = torch.empty((batch_size * n, self.suffix_len), 
+                                dtype=torch.long, 
+                                device=device)
+                
+                # track whether eoc is already generated
+                alive = torch.ones((batch_size * n, ), dtype=torch.bool, device=device) # filled with True
+
+                # -- encoder --
+                extend_enc_outputs = enc_outputs.repeat_interleave(n, dim=0) # batch_size * n
+                extend_enc_padding_mask = enc_padding_mask.repeat_interleave(n, dim=0) # batch_size * n
+                
+                # -- decoder --
+                dec_act  = dec_input_act[:, :1] # (batch_size, 1)
+                dec_act = dec_act.repeat_interleave(n, dim=0) # (batch_size * n, 1)
+
+                def filter_logits(logits):
+
+                    V = logits.size(-1)
+
+                    # avoid sampling PAD (0) and SOC (2)
+                    logits = logits.clone()
+                    logits[:, [0, 2]] = float('-inf')
+
+                    if sampling_mode == "random":
+                        return logits
+
+                    if sampling_mode == "top_k":
+                        t_k = min(k, V)
+                        top_k_logits, top_k_indices = torch.topk(logits, t_k, dim=-1)
+                        filtered = torch.full_like(logits, float('-inf'))
+                        filtered.scatter_(1, top_k_indices, top_k_logits)
+                        return filtered
+
+                    if sampling_mode == "top_p":
+                        probs = F.softmax(logits, dim=-1)  # (BN, V)
+                        sorted_probs, sorted_idx = torch.sort(probs, descending=True, dim=-1)
+                        cum_probs = torch.cumsum(sorted_probs, dim=-1)
+
+                        # tokens to remove: those after the cutoff
+                        # keep at least 1 token
+                        remove = cum_probs > p
+                        # shift right so the first token that makes cum_probs>p is kept
+                        remove[:, 1:] = remove[:, :-1].clone()
+                        remove[:, 0] = False
+
+                        keep_sorted = ~remove
+                        keep_vocab = torch.zeros_like(keep_sorted).scatter(1, sorted_idx, keep_sorted)
+
+                        filtered = logits.masked_fill(~keep_vocab, float('-inf'))
+                        return filtered
+
+                    raise ValueError(f"Unknown sampling mode: {sampling_mode}")
+
+                for t in range(self.suffix_len):
+
+                    dec_input, dec_padding_mask, dec_causal_mask = self.process_dec_input(dec_act) # batch_size * n
+                    
+                    act_logits = self.decoder(dec_input, 
+                                            dec_padding_mask, 
+                                            dec_causal_mask,
+                                            extend_enc_outputs,
+                                            extend_enc_padding_mask)
+                    # (batch_size * n, T, num_act)
+
+                    next_act_logits = act_logits[:, -1, :] # (batch_size * n, num_act)
+
+                    filtered_logits = filter_logits(next_act_logits)  
+
+                    probs = F.softmax(filtered_logits, dim=-1) # (batch_size * n, num_act)
+                    next_act = torch.multinomial(probs, 1).squeeze(-1) # (batch_size * n)
+
+                    # If a row is no longer alive, keep appending eoc_idx
+                    next_act = torch.where(alive, next_act, eoc_tensor)
+
+                    predictions[:, t] = next_act
+
+                    dec_act = torch.cat([dec_act, next_act.unsqueeze(1)], dim=1)
+
+                    # Update alive AFTER writing next_act
+                    alive = alive & (next_act != self.eoc_index)
+
+                    if not alive.any():
+                        if t + 1 < self.suffix_len:
+                            predictions[:, t+1:] = self.eoc_index
+                        break
+                
+                return predictions
+            
+            if diff:
+                candidates = generate_samples(n_candidate, sampling_mode=sampling)
+                samples = generate_samples(n_sample, sampling_mode='random')
+            else:
+                assert n_candidate == n_sample, "Error: n_candidate is different from n_sample"
+                samples = generate_samples(n_sample, sampling_mode='random')
+                candidates = samples.clone()
+
+            lens_sample = lens_till_eoc(samples, self.eoc_index)
+
+            cand_3d = candidates.view(batch_size, n_candidate, self.suffix_len)
+            samp_3d = samples.view(batch_size, n_sample, self.suffix_len)
+            ls_2d = lens_sample.view(batch_size, n_sample)
+
+            cand_3d = cand_3d.detach().cpu()
+            samp_3d = samp_3d.detach().cpu()
+            ls_2d = ls_2d.detach().cpu()
+
+            pred_list = []
+            pred_lens = []
+
+            for b in range(batch_size):
+
+                cand_block = cand_3d[b] # (n_candidate, suffix_len)
+
+                uniq_cands = torch.unique(cand_block, dim=0)
+
+                uniq_lens = lens_till_eoc(uniq_cands, self.eoc_index)
+
+                cand_lists = [uniq_cands[i, :int(uniq_lens[i])].tolist() 
+                            for i in range(uniq_cands.size(0))]
+                samp_lists = [samp_3d[b, j, :int(ls_2d[b, j])].tolist() 
+                            for j in range(n_sample)]
+                
+                Nc_u = len(cand_lists)
+
+                if Nc_u <= n_sample:
+                    rows = [np.asarray(dl_distance_seqs(c, samp_lists), dtype=np.float32) 
+                            for c in cand_lists]
+                    D = np.stack(rows, axis=0) 
+                
+                else:
+                    cols = [np.asarray(dl_distance_seqs(s, cand_lists), dtype=np.float32) 
+                            for s in samp_lists]
+                    D = np.stack(cols, axis=0).T 
+                
+                avg = D.mean(axis=1) 
+                best_idx = int(avg.argmin())
+                pred_list.append(cand_lists[best_idx])
+                pred_lens.append(int(uniq_lens[best_idx]))
+            
+            pred_len = torch.tensor(pred_lens)
+
+            return pred_list, pred_len
+        
+        if estimator == 'model_based':
+
+            def generate_samples(n, sampling_mode):
+
+                predictions = torch.empty((batch_size * n, self.suffix_len), 
+                                dtype=torch.long, 
+                                device=device)
+                
+                # store per-step log probability
+                logprobs = torch.zeros((batch_size * n, self.suffix_len),
+                                    dtype=torch.float,
+                                    device=device)
+                
+                # track whether eoc is already generated
+                alive = torch.ones((batch_size * n, ), dtype=torch.bool, device=device) # filled with True
+
+                # -- encoder --
+                extend_enc_outputs = enc_outputs.repeat_interleave(n, dim=0) # batch_size * n
+                extend_enc_padding_mask = enc_padding_mask.repeat_interleave(n, dim=0) # batch_size * n
+                
+                # -- decoder --
+                dec_act = dec_input_act[:, :1] # (batch_size, 1)
+                dec_act = dec_act.repeat_interleave(n, dim=0) # (batch_size * n, 1)
+                
+                def filter_logits(logits):
+
+                    V = logits.size(-1)
+
+                    # avoid sampling PAD (0) and SOC (2)
+                    logits = logits.clone()
+                    logits[:, [0, 2]] = float('-inf')
+
+                    if sampling_mode == "random":
+                        return logits
+
+                    if sampling_mode == "top_k":
+                        t_k = min(k, V)
+                        top_k_logits, top_k_indices = torch.topk(logits, t_k, dim=-1)
+                        filtered = torch.full_like(logits, float('-inf'))
+                        filtered.scatter_(1, top_k_indices, top_k_logits)
+                        return filtered
+
+                    if sampling_mode == "top_p":
+                        probs = F.softmax(logits, dim=-1) 
+                        sorted_probs, sorted_idx = torch.sort(probs, descending=True, dim=-1)
+                        cum_probs = torch.cumsum(sorted_probs, dim=-1)
+
+                        remove = cum_probs > p
+                        remove[:, 1:] = remove[:, :-1].clone()
+                        remove[:, 0] = False
+
+                        keep_sorted = ~remove
+                        keep_vocab = torch.zeros_like(keep_sorted).scatter(1, sorted_idx, keep_sorted)
+
+                        filtered = logits.masked_fill(~keep_vocab, float('-inf'))
+                        return filtered
+
+                    raise ValueError(f"Unknown sampling mode: {sampling_mode}")
+        
+                for t in range(self.suffix_len):
+
+                    dec_input, dec_padding_mask, dec_causal_mask = self.process_dec_input(dec_act) # batch_size * n
+                    act_logits = self.decoder(dec_input, 
+                                            dec_padding_mask, 
+                                            dec_causal_mask,
+                                            extend_enc_outputs,
+                                            extend_enc_padding_mask)
+                    # (batch_size * n, T, num_act)
+
+                    next_act_logits = act_logits[:, -1, :] # (batch_size * n, num_act)
+
+                    filtered_logits = filter_logits(next_act_logits)  
+
+                    probs = F.softmax(filtered_logits, dim=-1) # (batch_size * n, num_act)
+                    next_act = torch.multinomial(probs, 1).squeeze(-1) # (batch_size * n)
+
+                    # If a row is no longer alive, keep appending eoc_idx
+                    next_act = torch.where(alive, next_act, eoc_tensor)
+
+                    predictions[:, t] = next_act
+
+                    # store log probs
+                    filtered_logprobs = F.log_softmax(filtered_logits, dim=-1) 
+                    chosen_lp = filtered_logprobs.gather(1, next_act.unsqueeze(1)).squeeze(1)
+                    #  # if not alive, make the step logprob 0 so it doesn't affect products
+                    chosen_lp = torch.where(alive, chosen_lp, torch.zeros_like(chosen_lp))
+                    logprobs[:, t] = chosen_lp
+
+                    dec_act = torch.cat([dec_act, next_act.unsqueeze(1)], dim=1) # (batch_size, 1)
+
+                    # Update alive AFTER writing next_act
+                    alive = alive & (next_act != self.eoc_index)
+
+                    if not alive.any():
+                        if t + 1 < self.suffix_len:
+                            predictions[:, t+1:] = self.eoc_index
+                            logprobs[:, t+1:] = 0.0
+                        break
+                
+                return predictions, logprobs
+            
+            if diff:
+                candidates, _ = generate_samples(n_candidate, sampling_mode=sampling)
+                samples, logprobs = generate_samples(n_sample, sampling_mode='random')
+            else:
+                assert n_candidate == n_sample, "Error: n_candidate is different from n_sample"
+                samples, logprobs = generate_samples(n_sample, sampling_mode='random')
+                candidates = samples.clone()
+
+            cand_3d = candidates.view(batch_size, n_candidate, self.suffix_len)
+            samp_3d = samples.view(batch_size, n_sample, self.suffix_len)
+            lp_3d = logprobs.view(batch_size, n_sample, self.suffix_len)
+
+            cand_3d = cand_3d.detach().cpu()
+            samp_3d = samp_3d.detach().cpu()
+            lp_3d = lp_3d.detach().cpu()
+
+            pred_list = []
+            pred_lens = []
+
+            for b in range(batch_size):
+
+                cand_block = cand_3d[b] 
+                samp_block = samp_3d[b]
+                lp_block = lp_3d[b]
+
+                uniq_cands = torch.unique(cand_block, dim=0)
+                uniq_samps, inv = torch.unique(samp_block, dim=0, return_inverse=True)
+
+                cand_lens = lens_till_eoc(uniq_cands, self.eoc_index)
+                samp_lens = lens_till_eoc(uniq_samps, self.eoc_index)
+
+                cand_lists = [uniq_cands[i, :int(cand_lens[i])].tolist() 
+                            for i in range(uniq_cands.size(0))]
+                samp_lists = [uniq_samps[j, :int(samp_lens[j])].tolist() 
+                            for j in range(uniq_samps.size(0))]
+                
+                # get logprobs for unique samples (first occurrence)
+                n_samp = len(samp_lists)
+                N = inv.numel()
+                pos = torch.arange(N, device=inv.device, dtype=torch.long)
+                first_pos = torch.full((n_samp,), N, device=inv.device, dtype=torch.long)
+                first_pos.scatter_reduce_(0, inv, pos, reduce="amin", include_self=True)
+                uniq_lp = lp_block[first_pos]
+
+                # compute score per unique sample
+                N, L = uniq_lp.shape
+                ar = torch.arange(L, device=uniq_lp.device).unsqueeze(0)
+                mask = (ar < samp_lens.unsqueeze(1)).to(uniq_lp.dtype)
+                seq_logp = (uniq_lp * mask).sum(dim=1)
+                
+                log_score_np = seq_logp.numpy()
+                m = log_score_np.max()
+                w = np.exp(log_score_np - m).astype(np.float32)
+                w = w / (w.sum() + 1e-8)
+
+                rows = [np.asarray(dl_distance_seqs(c, samp_lists), dtype=np.float32) 
+                        for c in cand_lists]
+                D = np.stack(rows, axis=0)
+
+                D = D * w[None, :] 
+                
+                avg = D.sum(axis=1)
+                best_idx = int(avg.argmin())
+                pred_list.append(cand_lists[best_idx])
+                pred_lens.append(int(cand_lens[best_idx]))
+            
+            pred_len = torch.tensor(pred_lens)
+
+            return pred_list, pred_len
+
+        raise ValueError(f"Unknown estimator: {estimator}") 
+
     def argmax(self,
                cate_prefix, 
                nume_prefix,
@@ -514,372 +855,6 @@ class ED_Transformer(nn.Module):
         pred_list = [all_act_predictions[i, :int(pred_len[i])].tolist() 
                           for i in range(batch_size)]
         
-        return pred_list, pred_len
-    
-    def mc_bridge(self,
-            cate_prefix,
-            nume_prefix,
-            dec_input_act,
-            n_candidate,
-            n_sample,
-            sampling='random',
-            k=10,
-            p=0.9,
-            diff=False):
-        """
-        BRIDGE with Monte Carlo estimator
-        """
-        
-        device = cate_prefix.device
-        batch_size = cate_prefix.shape[0]
-        eoc_tensor = torch.tensor(self.eoc_index, device=device)
-
-        # -- encoder --
-        
-        enc_input, enc_padding_mask = self.process_enc_input(cate_prefix, nume_prefix) 
-        enc_outputs = self.encoder(enc_input, enc_padding_mask)
-
-        def generate_samples(n, sampling_mode):
-
-            predictions = torch.empty((batch_size * n, self.suffix_len), 
-                              dtype=torch.long, 
-                              device=device)
-            
-            # track whether eoc is already generated
-            alive = torch.ones((batch_size * n, ), dtype=torch.bool, device=device) # filled with True
-
-            # -- encoder --
-            extend_enc_outputs = enc_outputs.repeat_interleave(n, dim=0) # batch_size * n
-            extend_enc_padding_mask = enc_padding_mask.repeat_interleave(n, dim=0) # batch_size * n
-            
-            # -- decoder --
-            dec_act  = dec_input_act[:, :1] # (batch_size, 1)
-            dec_act = dec_act.repeat_interleave(n, dim=0) # (batch_size * n, 1)
-
-            def filter_logits(logits):
-
-                V = logits.size(-1)
-
-                # avoid sampling PAD (0) and SOC (2)
-                logits = logits.clone()
-                logits[:, [0, 2]] = float('-inf')
-
-                if sampling_mode == "random":
-                    return logits
-
-                if sampling_mode == "top_k":
-                    k = min(k, V)
-                    top_k_logits, top_k_indices = torch.topk(logits, k, dim=-1)
-                    filtered = torch.full_like(logits, float('-inf'))
-                    filtered.scatter_(1, top_k_indices, top_k_logits)
-                    return filtered
-
-                if sampling_mode == "top_p":
-                    probs = F.softmax(logits, dim=-1)  # (BN, V)
-                    sorted_probs, sorted_idx = torch.sort(probs, descending=True, dim=-1)
-                    cum_probs = torch.cumsum(sorted_probs, dim=-1)
-
-                    # tokens to remove: those after the cutoff
-                    # keep at least 1 token
-                    remove = cum_probs > p
-                    # shift right so the first token that makes cum_probs>p is kept
-                    remove[:, 1:] = remove[:, :-1].clone()
-                    remove[:, 0] = False
-
-                    keep_sorted = ~remove
-                    keep_vocab = torch.zeros_like(keep_sorted).scatter(1, sorted_idx, keep_sorted)
-
-                    filtered = logits.masked_fill(~keep_vocab, float('-inf'))
-                    return filtered
-
-                raise ValueError(f"Unknown sampling mode: {sampling_mode}")
-
-            for t in range(self.suffix_len):
-
-                dec_input, dec_padding_mask, dec_causal_mask = self.process_dec_input(dec_act) # batch_size * n
-                
-                act_logits = self.decoder(dec_input, 
-                                          dec_padding_mask, 
-                                          dec_causal_mask,
-                                          extend_enc_outputs,
-                                          extend_enc_padding_mask)
-                # (batch_size * n, T, num_act)
-
-                next_act_logits = act_logits[:, -1, :] # (batch_size * n, num_act)
-
-                filtered_logits = filter_logits(next_act_logits)  
-
-                probs = F.softmax(filtered_logits, dim=-1) # (batch_size * n, num_act)
-                next_act = torch.multinomial(probs, 1).squeeze(-1) # (batch_size * n)
-
-                # If a row is no longer alive, keep appending eoc_idx
-                next_act = torch.where(alive, next_act, eoc_tensor)
-
-                predictions[:, t] = next_act
-
-                dec_act = torch.cat([dec_act, next_act.unsqueeze(1)], dim=1)
-
-                # Update alive AFTER writing next_act
-                alive = alive & (next_act != self.eoc_index)
-
-                if not alive.any():
-                    if t + 1 < self.suffix_len:
-                        predictions[:, t+1:] = self.eoc_index
-                    break
-            
-            return predictions
-        
-        if diff:
-            candidates = generate_samples(n_candidate, sampling_mode=sampling)
-            samples = generate_samples(n_sample, sampling_mode='random')
-        else:
-            assert n_candidate == n_sample, "Error: n_candidate is different from n_sample"
-            samples = generate_samples(n_sample, sampling_mode='random')
-            candidates = samples.clone()
-
-        lens_sample = lens_till_eoc(samples, self.eoc_index)
-
-        cand_3d = candidates.view(batch_size, n_candidate, self.suffix_len)
-        samp_3d = samples.view(batch_size, n_sample, self.suffix_len)
-        ls_2d = lens_sample.view(batch_size, n_sample)
-
-        cand_3d = cand_3d.detach().cpu()
-        samp_3d = samp_3d.detach().cpu()
-        ls_2d = ls_2d.detach().cpu()
-
-        pred_list = []
-        pred_lens = []
-
-        for b in range(batch_size):
-
-            cand_block = cand_3d[b] # (n_candidate, suffix_len)
-
-            uniq_cands = torch.unique(cand_block, dim=0)
-
-            uniq_lens = lens_till_eoc(uniq_cands, self.eoc_index)
-
-            cand_lists = [uniq_cands[i, :int(uniq_lens[i])].tolist() 
-                          for i in range(uniq_cands.size(0))]
-            samp_lists = [samp_3d[b, j, :int(ls_2d[b, j])].tolist() 
-                          for j in range(n_sample)]
-            
-            Nc_u = len(cand_lists)
-
-            if Nc_u <= n_sample:
-                rows = [np.asarray(dl_distance_seqs(c, samp_lists), dtype=np.float32) 
-                        for c in cand_lists]
-                D = np.stack(rows, axis=0) 
-            
-            else:
-                cols = [np.asarray(dl_distance_seqs(s, cand_lists), dtype=np.float32) 
-                        for s in samp_lists]
-                D = np.stack(cols, axis=0).T 
-            
-            avg = D.mean(axis=1) 
-            best_idx = int(avg.argmin())
-            pred_list.append(cand_lists[best_idx])
-            pred_lens.append(int(uniq_lens[best_idx]))
-        
-        pred_len = torch.tensor(pred_lens)
-
-        return pred_list, pred_len
-
-    def mb_bridge(self,
-            cate_prefix,
-            nume_prefix,
-            dec_input_act,
-            n_candidate,
-            n_sample,
-            sampling='random',
-            k=10,
-            p=0.9,
-            length_norm=False,
-            diff=False):
-        """
-        BRIDGE with model-based estimator
-        """
-
-        device = cate_prefix.device
-        batch_size = cate_prefix.shape[0]
-        eoc_tensor = torch.tensor(self.eoc_index, device=device)
-        
-        # -- encoder --
-
-        enc_input, enc_padding_mask = self.process_enc_input(cate_prefix, nume_prefix) 
-        enc_outputs = self.encoder(enc_input, enc_padding_mask)
-
-        def generate_samples(n, sampling_mode):
-
-            predictions = torch.empty((batch_size * n, self.suffix_len), 
-                              dtype=torch.long, 
-                              device=device)
-            
-            # store per-step log probability
-            logprobs = torch.zeros((batch_size * n, self.suffix_len),
-                                dtype=torch.float,
-                                device=device)
-            
-            # track whether eoc is already generated
-            alive = torch.ones((batch_size * n, ), dtype=torch.bool, device=device) # filled with True
-
-            # -- encoder --
-            extend_enc_outputs = enc_outputs.repeat_interleave(n, dim=0) # batch_size * n
-            extend_enc_padding_mask = enc_padding_mask.repeat_interleave(n, dim=0) # batch_size * n
-            
-            # -- decoder --
-            dec_act = dec_input_act[:, :1] # (batch_size, 1)
-            dec_act = dec_act.repeat_interleave(n, dim=0) # (batch_size * n, 1)
-            
-            def filter_logits(logits):
-
-                V = logits.size(-1)
-
-                # avoid sampling PAD (0) and SOC (2)
-                logits = logits.clone()
-                logits[:, [0, 2]] = float('-inf')
-
-                if sampling_mode == "random":
-                    return logits
-
-                if sampling_mode == "top_k":
-                    k = min(k, V)
-                    top_k_logits, top_k_indices = torch.topk(logits, k, dim=-1)
-                    filtered = torch.full_like(logits, float('-inf'))
-                    filtered.scatter_(1, top_k_indices, top_k_logits)
-                    return filtered
-
-                if sampling_mode == "top_p":
-                    probs = F.softmax(logits, dim=-1) 
-                    sorted_probs, sorted_idx = torch.sort(probs, descending=True, dim=-1)
-                    cum_probs = torch.cumsum(sorted_probs, dim=-1)
-
-                    remove = cum_probs > p
-                    remove[:, 1:] = remove[:, :-1].clone()
-                    remove[:, 0] = False
-
-                    keep_sorted = ~remove
-                    keep_vocab = torch.zeros_like(keep_sorted).scatter(1, sorted_idx, keep_sorted)
-
-                    filtered = logits.masked_fill(~keep_vocab, float('-inf'))
-                    return filtered
-
-                raise ValueError(f"Unknown sampling mode: {sampling_mode}")
-    
-            for t in range(self.suffix_len):
-
-                dec_input, dec_padding_mask, dec_causal_mask = self.process_dec_input(dec_act) # batch_size * n
-                act_logits = self.decoder(dec_input, 
-                                          dec_padding_mask, 
-                                          dec_causal_mask,
-                                          extend_enc_outputs,
-                                          extend_enc_padding_mask)
-                # (batch_size * n, T, num_act)
-
-                next_act_logits = act_logits[:, -1, :] # (batch_size * n, num_act)
-
-                filtered_logits = filter_logits(next_act_logits)  
-
-                probs = F.softmax(filtered_logits, dim=-1) # (batch_size * n, num_act)
-                next_act = torch.multinomial(probs, 1).squeeze(-1) # (batch_size * n)
-
-                # If a row is no longer alive, keep appending eoc_idx
-                next_act = torch.where(alive, next_act, eoc_tensor)
-
-                predictions[:, t] = next_act
-
-                # store log probs
-                filtered_logprobs = F.log_softmax(filtered_logits, dim=-1) 
-                chosen_lp = filtered_logprobs.gather(1, next_act.unsqueeze(1)).squeeze(1)
-                #  # if not alive, make the step logprob 0 so it doesn't affect products
-                chosen_lp = torch.where(alive, chosen_lp, torch.zeros_like(chosen_lp))
-                logprobs[:, t] = chosen_lp
-
-                dec_act = next_act.unsqueeze(-1) # (batch_size, 1)
-
-                # Update alive AFTER writing next_act
-                alive = alive & (next_act != self.eoc_index)
-
-                if not alive.any():
-                    if t + 1 < self.suffix_len:
-                        predictions[:, t+1:] = self.eoc_index
-                        logprobs[:, t+1:] = 0.0
-                    break
-            
-            return predictions, logprobs
-        
-        if diff:
-            candidates, _ = generate_samples(n_candidate, sampling_mode=sampling)
-            samples, logprobs = generate_samples(n_sample, sampling_mode='random')
-        else:
-            assert n_candidate == n_sample, "Error: n_candidate is different from n_sample"
-            samples, logprobs = generate_samples(n_sample, sampling_mode='random')
-            candidates = samples.clone()
-
-        cand_3d = candidates.view(batch_size, n_candidate, self.suffix_len)
-        samp_3d = samples.view(batch_size, n_sample, self.suffix_len)
-        lp_3d = logprobs.view(batch_size, n_sample, self.suffix_len)
-
-        cand_3d = cand_3d.detach().cpu()
-        samp_3d = samp_3d.detach().cpu()
-        lp_3d = lp_3d.detach().cpu()
-
-        pred_list = []
-        pred_lens = []
-
-        for b in range(batch_size):
-
-            cand_block = cand_3d[b] 
-            samp_block = samp_3d[b]
-            lp_block = lp_3d[b]
-
-            uniq_cands = torch.unique(cand_block, dim=0)
-            uniq_samps, inv = torch.unique(samp_block, dim=0, return_inverse=True)
-
-            cand_lens = lens_till_eoc(uniq_cands, self.eoc_index)
-            samp_lens = lens_till_eoc(uniq_samps, self.eoc_index)
-
-            cand_lists = [uniq_cands[i, :int(cand_lens[i])].tolist() 
-                          for i in range(uniq_cands.size(0))]
-            samp_lists = [uniq_samps[j, :int(samp_lens[j])].tolist() 
-                          for j in range(uniq_samps.size(0))]
-            
-            # get logprobs for unique samples (first occurrence)
-            n_samp = len(samp_lists)
-            N = inv.numel()
-            pos = torch.arange(N, device=inv.device, dtype=torch.long)
-            first_pos = torch.full((n_samp,), N, device=inv.device, dtype=torch.long)
-            first_pos.scatter_reduce_(0, inv, pos, reduce="amin", include_self=True)
-            uniq_lp = lp_block[first_pos]
-
-            # compute score per unique sample
-            N, L = uniq_lp.shape
-            ar = torch.arange(L, device=uniq_lp.device).unsqueeze(0)
-            mask = (ar < samp_lens.unsqueeze(1)).to(uniq_lp.dtype)
-            seq_logp = (uniq_lp * mask).sum(dim=1)
-
-            if length_norm:
-                log_score = seq_logp + samp_lens.to(seq_logp.dtype) 
-            else:
-                log_score = seq_logp
-            
-            log_score_np = log_score.numpy()
-            m = log_score_np.max()
-            w = np.exp(log_score_np - m).astype(np.float32)
-            w = w / (w.sum() + 1e-8)
-
-            rows = [np.asarray(dl_distance_seqs(c, samp_lists), dtype=np.float32) 
-                    for c in cand_lists]
-            D = np.stack(rows, axis=0)
-
-            D = D * w[None, :] 
-            
-            avg = D.sum(axis=1)
-            best_idx = int(avg.argmin())
-            pred_list.append(cand_lists[best_idx])
-            pred_lens.append(int(cand_lens[best_idx]))
-        
-        pred_len = torch.tensor(pred_lens)
-
         return pred_list, pred_len
     
     def prob_rank(self,
