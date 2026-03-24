@@ -65,6 +65,311 @@ class MarkovModel:
         return self.probs.index_select(0, rows)
 
     @torch.no_grad()
+    def bridge(
+        self,
+        prefixes, 
+        n_candidate,
+        n_sample,
+        estimator,
+        sampling = "random",
+        k = 10,
+        p = 0.9,
+        diff = False,
+        length_norm = False,
+        eoc_id = 3,
+        banned_ids=(0, 2),    
+    ):
+
+        device = prefixes.device
+        B = prefixes.size(0)
+        T = self.suffix_len
+        V = self.V
+        eoc_id = int(eoc_id)
+        banned_ids = list(banned_ids)
+
+        eoc_tensor = torch.tensor(eoc_id, device=device, dtype=torch.long)
+
+        prefixes = prefixes.clone()
+        
+        if estimator == 'MC':
+
+            def generate_samples(n, sampling_mode):
+                n = int(n)
+
+                predictions = torch.empty((B * n, T), dtype=torch.long, device=device)
+
+                alive = torch.ones((B * n,), dtype=torch.bool, device=device)
+
+                ctx = prefixes.to(torch.long).repeat_interleave(n, dim=0)
+
+                def filter_probs(probs):
+                    prob = probs.clone()
+
+                    if banned_ids:
+                        prob[:, banned_ids] = 0.0
+
+                    if sampling_mode == "random":
+                        denom = prob.sum(dim=-1, keepdim=True).clamp_min(1e-12)
+                        return prob / denom
+
+                    if sampling_mode == "top_k":
+                        t_k = min(int(k), V)
+                        topv, topi = torch.topk(prob, t_k, dim=-1)
+                        out = torch.zeros_like(prob)
+                        out.scatter_(1, topi, topv)
+                        out = out / out.sum(dim=-1, keepdim=True).clamp_min(1e-12)
+                        return out
+
+                    if sampling_mode == "top_p":
+                        p_thr = float(p)
+                        sorted_p, sorted_i = torch.sort(prob, descending=True, dim=-1)
+                        cum = torch.cumsum(sorted_p, dim=-1)
+
+                        remove = cum > p_thr
+                        remove[:, 1:] = remove[:, :-1].clone()
+                        remove[:, 0] = False
+
+                        sorted_p = sorted_p.masked_fill(remove, 0.0)
+                        sorted_p = sorted_p / sorted_p.sum(dim=-1, keepdim=True).clamp_min(1e-12)
+
+                        out = torch.zeros_like(prob)
+                        out.scatter_(1, sorted_i, sorted_p)
+                        return out
+
+                    raise ValueError(f"Unknown sampling mode: {sampling_mode}")
+
+                for t in range(T):
+                    base_probs = self.next_probs(ctx)  
+                    filt_probs = filter_probs(base_probs) 
+
+                    next_act = torch.multinomial(filt_probs, 1).squeeze(1)
+
+                    next_act = torch.where(alive, next_act, eoc_tensor)
+
+                    predictions[:, t] = next_act
+
+                    alive = alive & (next_act != eoc_id)
+
+                    ctx = torch.stack([ctx[:, 1], next_act], dim=1)
+
+                    if not alive.any():
+                        if t + 1 < T:
+                            predictions[:, t + 1 :] = eoc_id
+                        break
+
+                return predictions
+
+            if diff:
+                candidates = generate_samples(n_candidate, sampling_mode=sampling) 
+                samples = generate_samples(n_sample, sampling_mode='random') 
+            else:
+                assert n_candidate == n_sample, "Error: n_candidate is different from n_sample"
+                samples = generate_samples(n_sample, sampling_mode='random')
+                candidates = samples.clone()
+            
+            lens_sample = lens_till_eoc(samples, eoc_id)
+
+            cand_3d = candidates.view(B, n_candidate, T)
+            samp_3d = samples.view(B, n_sample, T)
+            ls_2d = lens_sample.view(B, n_sample)
+
+            cand_3d = cand_3d.detach().cpu()
+            samp_3d = samp_3d.detach().cpu()
+            ls_2d = ls_2d.detach().cpu()
+
+            pred_list = []
+            pred_lens = []
+
+            for b in range(B):
+
+                cand_block = cand_3d[b] 
+
+                uniq_cands = torch.unique(cand_block, dim=0) 
+                uniq_lens = lens_till_eoc(uniq_cands, eoc_id)
+
+                cand_lists = [
+                    uniq_cands[i, : int(uniq_lens[i])].tolist()
+                    for i in range(uniq_cands.size(0))
+                ]
+                samp_lists = [
+                    samp_3d[b, j, : int(ls_2d[b, j])].tolist()
+                    for j in range(n_sample)
+                ]
+
+                Nc_u = len(cand_lists)
+
+                if Nc_u <= n_sample:
+                    rows = [
+                        np.asarray(dl_distance_seqs(c, samp_lists), dtype=np.float32)
+                        for c in cand_lists
+                    ]
+                    D = np.stack(rows, axis=0)
+                else:
+                    cols = [
+                        np.asarray(dl_distance_seqs(s, cand_lists), dtype=np.float32)
+                        for s in samp_lists
+                    ]
+                    D = np.stack(cols, axis=0).T
+
+                avg = D.mean(axis=1)  
+                best_idx = int(avg.argmin())
+
+                pred_list.append(cand_lists[best_idx])
+                pred_lens.append(int(uniq_lens[best_idx]))
+
+            pred_len = torch.tensor(pred_lens, dtype=torch.long, device=device)
+
+            return pred_list, pred_len
+
+        if estimator == 'model_based':
+
+            def generate_samples(n, sampling_mode):
+        
+                n = int(n)
+                BN = B * n
+
+                predictions = torch.empty((BN, T), dtype=torch.long, device=device)
+                logprobs = torch.zeros((BN, T), dtype=torch.float32, device=device)
+
+                alive = torch.ones((BN,), dtype=torch.bool, device=device)
+                ctx = prefixes.to(torch.long).repeat_interleave(n, dim=0)
+
+                def filter_probs(probs):
+                    prob = probs.clone()
+
+                    if banned_ids:
+                        prob[:, banned_ids] = 0.0
+
+                    if sampling_mode == "random":
+                        denom = prob.sum(dim=-1, keepdim=True).clamp_min(1e-12)
+                        return prob / denom
+
+                    if sampling_mode == "top_k":
+                        t_k = min(int(k), V)
+                        topv, topi = torch.topk(prob, t_k, dim=-1)
+                        out = torch.zeros_like(prob)
+                        out.scatter_(1, topi, topv)
+                        out = out / out.sum(dim=-1, keepdim=True).clamp_min(1e-12)
+                        return out
+
+                    if sampling_mode == "top_p":
+                        p_thr = float(p)
+                        sorted_p, sorted_i = torch.sort(prob, descending=True, dim=-1)
+                        cum = torch.cumsum(sorted_p, dim=-1)
+
+                        remove = cum > p_thr
+                        remove[:, 1:] = remove[:, :-1].clone()
+                        remove[:, 0] = False
+
+                        sorted_p = sorted_p.masked_fill(remove, 0.0)
+                        sorted_p = sorted_p / sorted_p.sum(dim=-1, keepdim=True).clamp_min(1e-12)
+
+                        out = torch.zeros_like(prob)
+                        out.scatter_(1, sorted_i, sorted_p)
+                        return out
+
+                    raise ValueError(f"Unknown sampling mode: {sampling_mode}")
+
+                for t in range(T):
+                    base_probs = self.next_probs(ctx)  
+                    filt_probs = filter_probs(base_probs)  
+
+                    next_act = torch.multinomial(filt_probs, 1).squeeze(1)
+
+                    next_act = torch.where(alive, next_act, eoc_tensor)
+                    predictions[:, t] = next_act
+
+                    chosen_p = filt_probs.gather(1, next_act.unsqueeze(1)).squeeze(1) 
+                    chosen_lp = torch.log(chosen_p.clamp_min(1e-12))
+                    chosen_lp = torch.where(alive, chosen_lp, torch.zeros_like(chosen_lp))
+                    logprobs[:, t] = chosen_lp
+
+                    alive = alive & (next_act != eoc_id)
+
+                    ctx = torch.stack([ctx[:, 1], next_act], dim=1)
+
+                    if not alive.any():
+                        if t + 1 < T:
+                            predictions[:, t + 1 :] = eoc_id
+                            logprobs[:, t + 1 :] = 0.0
+                        break
+
+                return predictions, logprobs
+
+            if diff:
+                candidates, _ = generate_samples(n_candidate, sampling_mode=sampling)
+                samples, logprobs = generate_samples(n_sample, sampling_mode='random')
+            else:
+                assert n_candidate == n_sample, "Error: n_candidate is different from n_sample"
+                samples, logprobs = generate_samples(n_sample, sampling_mode='random')
+                candidates = samples.clone()
+
+            cand_3d = candidates.view(B, n_candidate, T)
+            samp_3d = samples.view(B, n_sample, T)
+            lp_3d = logprobs.view(B, n_sample, T)
+
+            cand_3d = cand_3d.detach().cpu()
+            samp_3d = samp_3d.detach().cpu()
+            lp_3d = lp_3d.detach().cpu()
+
+            pred_list = []
+            pred_lens = []
+
+            for b in range(B):
+                cand_block = cand_3d[b]
+                samp_block = samp_3d[b]
+                lp_block = lp_3d[b] 
+
+                uniq_cands = torch.unique(cand_block, dim=0)
+                uniq_samps, inv = torch.unique(samp_block, dim=0, return_inverse=True)
+
+                cand_lens = lens_till_eoc(uniq_cands, eoc_id)
+                samp_lens = lens_till_eoc(uniq_samps, eoc_id)
+
+                cand_lists = [uniq_cands[i, : int(cand_lens[i])].tolist() for i in range(uniq_cands.size(0))]
+                samp_lists = [uniq_samps[j, : int(samp_lens[j])].tolist() for j in range(uniq_samps.size(0))]
+
+                n_samp_u = uniq_samps.size(0)
+                N = inv.numel()
+                pos = torch.arange(N, dtype=torch.long)
+
+                first_pos = torch.full((n_samp_u,), N, dtype=torch.long)
+                first_pos.scatter_reduce_(0, inv, pos, reduce="amin", include_self=True)
+
+                uniq_lp = lp_block[first_pos]
+
+                Ns_u, L = uniq_lp.shape
+                ar = torch.arange(L).unsqueeze(0) 
+                mask = (ar < samp_lens.unsqueeze(1)).to(uniq_lp.dtype)
+                seq_logp = (uniq_lp * mask).sum(dim=1) 
+
+                if length_norm:
+                    log_score = seq_logp + samp_lens.to(seq_logp.dtype)
+                else:
+                    log_score = seq_logp
+
+                log_score_np = log_score.numpy()
+                m = log_score_np.max()
+                w = np.exp(log_score_np - m).astype(np.float32)
+                w = w / (w.sum() + 1e-8) 
+
+                rows = [np.asarray(dl_distance_seqs(c, samp_lists), dtype=np.float32) for c in cand_lists]
+                D = np.stack(rows, axis=0) 
+
+                D = D * w[None, :]
+                avg = D.sum(axis=1) 
+
+                best_idx = int(avg.argmin())
+                pred_list.append(cand_lists[best_idx])
+                pred_lens.append(int(cand_lens[best_idx]))
+
+            pred_len = torch.tensor(pred_lens, dtype=torch.long, device=device)
+
+            return pred_list, pred_len
+        
+        raise ValueError(f"Unknown estimator: {estimator}")
+
+    @torch.no_grad()
     def argmax(self, ctx: torch.Tensor, eoc_id: int = 3):
         device = ctx.device
         B = ctx.shape[0]
@@ -282,336 +587,6 @@ class MarkovModel:
             preds_cpu[i, : int(pred_len_cpu[i])].tolist()
             for i in range(B)
         ]
-        return pred_list, pred_len
-    
-    @torch.no_grad()
-    def mc_bridge(
-        self,
-        prefixes,
-        n_candidate,
-        n_sample,
-        sampling='random',
-        k=10,
-        p=0.9,
-        diff=False,
-        eoc_id=int(3),
-        banned_ids=(0, 2),
-    ):
-        """
-        BRIDGE with Monte Carlo estimator
-        """
-
-        device = prefixes.device
-        B = prefixes.size(0)
-        T = self.suffix_len
-        V = self.V
-        eoc_id = int(eoc_id)
-        banned_ids = list(banned_ids)
-
-        eoc_tensor = torch.tensor(eoc_id, device=device, dtype=torch.long)
-
-        prefixes = prefixes.clone()
-
-        def generate_samples(n, sampling_mode):
-            n = int(n)
-
-            predictions = torch.empty((B * n, T), dtype=torch.long, device=device)
-
-            alive = torch.ones((B * n,), dtype=torch.bool, device=device)
-
-            ctx = prefixes.to(torch.long).repeat_interleave(n, dim=0)
-
-            def filter_probs(probs):
-                p = probs.clone()
-
-                if banned_ids:
-                    p[:, banned_ids] = 0.0
-
-                if sampling_mode == "random":
-                    denom = p.sum(dim=-1, keepdim=True).clamp_min(1e-12)
-                    return p / denom
-
-                if sampling_mode == "top_k":
-                    k = min(int(k), V)
-                    topv, topi = torch.topk(p, k, dim=-1)
-                    out = torch.zeros_like(p)
-                    out.scatter_(1, topi, topv)
-                    out = out / out.sum(dim=-1, keepdim=True).clamp_min(1e-12)
-                    return out
-
-                if sampling_mode == "top_p":
-                    p_thr = float(p)
-                    sorted_p, sorted_i = torch.sort(p, descending=True, dim=-1)
-                    cum = torch.cumsum(sorted_p, dim=-1)
-
-                    remove = cum > p_thr
-                    remove[:, 1:] = remove[:, :-1].clone()
-                    remove[:, 0] = False
-
-                    sorted_p = sorted_p.masked_fill(remove, 0.0)
-                    sorted_p = sorted_p / sorted_p.sum(dim=-1, keepdim=True).clamp_min(1e-12)
-
-                    out = torch.zeros_like(p)
-                    out.scatter_(1, sorted_i, sorted_p)
-                    return out
-
-                raise ValueError(f"Unknown sampling mode: {sampling_mode}")
-
-            for t in range(T):
-                base_probs = self.next_probs(ctx)  
-                filt_probs = filter_probs(base_probs) 
-
-                next_act = torch.multinomial(filt_probs, 1).squeeze(1)
-
-                next_act = torch.where(alive, next_act, eoc_tensor)
-
-                predictions[:, t] = next_act
-
-                alive = alive & (next_act != eoc_id)
-
-                ctx = torch.stack([ctx[:, 1], next_act], dim=1)
-
-                if not alive.any():
-                    if t + 1 < T:
-                        predictions[:, t + 1 :] = eoc_id
-                    break
-
-            return predictions
-
-        if diff:
-            candidates = generate_samples(n_candidate, sampling_mode=sampling) 
-            samples = generate_samples(n_sample, sampling_mode='random') 
-        else:
-            assert n_candidate == n_sample, "Error: n_candidate is different from n_sample"
-            samples = generate_samples(n_sample, sampling_mode='random')
-            candidates = samples.clone()
-        
-        lens_sample = lens_till_eoc(samples, eoc_id)
-
-        cand_3d = candidates.view(B, n_candidate, T)
-        samp_3d = samples.view(B, n_sample, T)
-        ls_2d = lens_sample.view(B, n_sample)
-
-        cand_3d = cand_3d.detach().cpu()
-        samp_3d = samp_3d.detach().cpu()
-        ls_2d = ls_2d.detach().cpu()
-
-        pred_list = []
-        pred_lens = []
-
-        for b in range(B):
-
-            cand_block = cand_3d[b] 
-
-            uniq_cands = torch.unique(cand_block, dim=0) 
-            uniq_lens = lens_till_eoc(uniq_cands, eoc_id)
-
-            cand_lists = [
-                uniq_cands[i, : int(uniq_lens[i])].tolist()
-                for i in range(uniq_cands.size(0))
-            ]
-            samp_lists = [
-                samp_3d[b, j, : int(ls_2d[b, j])].tolist()
-                for j in range(n_sample)
-            ]
-
-            Nc_u = len(cand_lists)
-
-            if Nc_u <= n_sample:
-                rows = [
-                    np.asarray(dl_distance_seqs(c, samp_lists), dtype=np.float32)
-                    for c in cand_lists
-                ]
-                D = np.stack(rows, axis=0)
-            else:
-                cols = [
-                    np.asarray(dl_distance_seqs(s, cand_lists), dtype=np.float32)
-                    for s in samp_lists
-                ]
-                D = np.stack(cols, axis=0).T
-
-            avg = D.mean(axis=1)  
-            best_idx = int(avg.argmin())
-
-            pred_list.append(cand_lists[best_idx])
-            pred_lens.append(int(uniq_lens[best_idx]))
-
-        pred_len = torch.tensor(pred_lens, dtype=torch.long, device=device)
-
-        return pred_list, pred_len
-
-    @torch.no_grad()
-    def mb_bridge(
-        self,
-        prefixes, 
-        n_candidate,
-        n_sample,
-        sampling = "random",
-        k = 10,
-        p = 0.9,
-        length_norm = False,
-        diff = False,
-        eoc_id = 3,
-        banned_ids=(0, 2),    
-    ):
-        """
-        BRIDGE with model-based estimator
-        """
-
-        device = prefixes.device
-        B = prefixes.size(0)
-        T = self.suffix_len
-        V = self.V
-        eoc_id = int(eoc_id)
-        banned_ids = list(banned_ids)
-
-        eoc_tensor = torch.tensor(eoc_id, device=device, dtype=torch.long)
-
-        prefixes = prefixes.clone()
-
-        def generate_samples(n, sampling_mode):
-    
-            n = int(n)
-            BN = B * n
-
-            predictions = torch.empty((BN, T), dtype=torch.long, device=device)
-            logprobs = torch.zeros((BN, T), dtype=torch.float32, device=device)
-
-            alive = torch.ones((BN,), dtype=torch.bool, device=device)
-            ctx = prefixes.to(torch.long).repeat_interleave(n, dim=0)
-
-            def filter_probs(probs: torch.Tensor) -> torch.Tensor:
-            
-                p = probs.clone()
-
-                if banned_ids:
-                    p[:, banned_ids] = 0.0
-
-                if sampling_mode == "random":
-                    denom = p.sum(dim=-1, keepdim=True).clamp_min(1e-12)
-                    return p / denom
-
-                if sampling_mode == "top_k":
-                    k = min(int(k), V)
-                    topv, topi = torch.topk(p, k, dim=-1)  # (BN,k)
-                    out = torch.zeros_like(p)
-                    out.scatter_(1, topi, topv)
-                    out = out / out.sum(dim=-1, keepdim=True).clamp_min(1e-12)
-                    return out
-
-                if sampling_mode == "top_p":
-                    p_thr = float(p)
-                    sorted_p, sorted_i = torch.sort(p, descending=True, dim=-1)   # (BN,V)
-                    cum = torch.cumsum(sorted_p, dim=-1)
-
-                    remove = cum > p_thr
-                    remove[:, 1:] = remove[:, :-1].clone()
-                    remove[:, 0] = False
-
-                    sorted_p = sorted_p.masked_fill(remove, 0.0)
-                    sorted_p = sorted_p / sorted_p.sum(dim=-1, keepdim=True).clamp_min(1e-12)
-
-                    out = torch.zeros_like(p)
-                    out.scatter_(1, sorted_i, sorted_p)
-                    return out
-
-                raise ValueError(f"Unknown sampling mode: {sampling_mode}")
-
-            for t in range(T):
-                base_probs = self.next_probs(ctx)  
-                filt_probs = filter_probs(base_probs)  
-
-                next_act = torch.multinomial(filt_probs, 1).squeeze(1)
-
-                next_act = torch.where(alive, next_act, eoc_tensor)
-                predictions[:, t] = next_act
-
-                chosen_p = filt_probs.gather(1, next_act.unsqueeze(1)).squeeze(1) 
-                chosen_lp = torch.log(chosen_p.clamp_min(1e-12))
-                chosen_lp = torch.where(alive, chosen_lp, torch.zeros_like(chosen_lp))
-                logprobs[:, t] = chosen_lp
-
-                alive = alive & (next_act != eoc_id)
-
-                ctx = torch.stack([ctx[:, 1], next_act], dim=1)
-
-                if not alive.any():
-                    if t + 1 < T:
-                        predictions[:, t + 1 :] = eoc_id
-                        logprobs[:, t + 1 :] = 0.0
-                    break
-
-            return predictions, logprobs
-
-        if diff:
-            candidates, _ = generate_samples(n_candidate, sampling_mode=sampling)
-            samples, logprobs = generate_samples(n_sample, sampling_mode='random')
-        else:
-            assert n_candidate == n_sample, "Error: n_candidate is different from n_sample"
-            samples, logprobs = generate_samples(n_sample, sampling_mode='random')
-            candidates = samples.clone()
-
-        cand_3d = candidates.view(B, n_candidate, T)
-        samp_3d = samples.view(B, n_sample, T)
-        lp_3d = logprobs.view(B, n_sample, T)
-
-        cand_3d = cand_3d.detach().cpu()
-        samp_3d = samp_3d.detach().cpu()
-        lp_3d = lp_3d.detach().cpu()
-
-        pred_list = []
-        pred_lens = []
-
-        for b in range(B):
-            cand_block = cand_3d[b]
-            samp_block = samp_3d[b]
-            lp_block = lp_3d[b] 
-
-            uniq_cands = torch.unique(cand_block, dim=0)
-            uniq_samps, inv = torch.unique(samp_block, dim=0, return_inverse=True)
-
-            cand_lens = lens_till_eoc(uniq_cands, eoc_id)
-            samp_lens = lens_till_eoc(uniq_samps, eoc_id)
-
-            cand_lists = [uniq_cands[i, : int(cand_lens[i])].tolist() for i in range(uniq_cands.size(0))]
-            samp_lists = [uniq_samps[j, : int(samp_lens[j])].tolist() for j in range(uniq_samps.size(0))]
-
-            n_samp_u = uniq_samps.size(0)
-            N = inv.numel()
-            pos = torch.arange(N, dtype=torch.long)
-
-            first_pos = torch.full((n_samp_u,), N, dtype=torch.long)
-            first_pos.scatter_reduce_(0, inv, pos, reduce="amin", include_self=True)
-
-            uniq_lp = lp_block[first_pos]
-
-            Ns_u, L = uniq_lp.shape
-            ar = torch.arange(L).unsqueeze(0) 
-            mask = (ar < samp_lens.unsqueeze(1)).to(uniq_lp.dtype)
-            seq_logp = (uniq_lp * mask).sum(dim=1) 
-
-            if length_norm:
-                log_score = seq_logp + samp_lens.to(seq_logp.dtype)
-            else:
-                log_score = seq_logp
-
-            log_score_np = log_score.numpy()
-            m = log_score_np.max()
-            w = np.exp(log_score_np - m).astype(np.float32)
-            w = w / (w.sum() + 1e-8) 
-
-            rows = [np.asarray(dl_distance_seqs(c, samp_lists), dtype=np.float32) for c in cand_lists]
-            D = np.stack(rows, axis=0) 
-
-            D = D * w[None, :]
-            avg = D.sum(axis=1) 
-
-            best_idx = int(avg.argmin())
-            pred_list.append(cand_lists[best_idx])
-            pred_lens.append(int(cand_lens[best_idx]))
-
-        pred_len = torch.tensor(pred_lens, dtype=torch.long, device=device)
-
         return pred_list, pred_len
 
     @torch.no_grad()
