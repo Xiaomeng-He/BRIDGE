@@ -12,8 +12,8 @@ The repository includes the following materials:
 
 - **Supplementary Materials**:  Supplementary materials, including:
   - an analysis comparing the performance of **BRIDGE** with a re-ranking method that randomly samples 50 suffixes and ranks them by likelihood ([link](<Supplementary Materials/BRIDGE vs Likelihood-Based Re-rank.md>))
-  - detailed result tables (including means and standard deviations) comparing **BRIDGE** with four baseline decoding strategies
-  - detailed result tables (including means and standard deviations) comparing **BRIDGE** (LSTM-based) with other suffix prediction models
+  - detailed result tables (including means and standard deviations) comparing **BRIDGE** with four baseline decoding strategies ([link](<Supplementary Materials/Benchmark Decoding Strategy.md>))
+  - detailed result tables (including means and standard deviations) comparing **BRIDGE** (LSTM-based) with other suffix prediction models ([link](<Supplementary Materials/Benchmark Suffix Prediction Models.md>))
 
 - **Preprocessing**:  Code demonstrating the preprocessing steps.
 
@@ -21,9 +21,7 @@ The repository includes the following materials:
 
 ## BRIDGE Configuration
 
-Use **`bridge(...)`** to implement BRIDGE.
-
-The method supports the following configuration options:
+BRIDGE is implemented by **`bridge(...)`**. The method supports the following configuration options:
 
 - **Estimator (`estimator`)**: determines how Bayes risk is estimated.
   - `'MC'`: Monte Carlo estimator
@@ -43,7 +41,7 @@ The method supports the following configuration options:
   - `top-k` (if `top-k` is used, specify the value of `k` using `k=...`)  
   - `top-p` (if `top-p` is used, specify the value of `p` using `p=...`)
 
-When `estimator='model_based'`, the following option is also available:
+When `estimator='model_based'`, the following option also applies:
 
 - **Length normalization (`length_norm`)**:
   - `False` (default; used in the paper): disable length normalization  
