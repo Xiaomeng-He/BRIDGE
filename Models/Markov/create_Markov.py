@@ -74,8 +74,7 @@ class MarkovModel:
         sampling = "random",
         k = 10,
         p = 0.9,
-        diff = False,
-        length_norm = False,
+        diff = False
         eoc_id = 3,
         banned_ids=(0, 2),    
     ):
@@ -343,12 +342,7 @@ class MarkovModel:
                 mask = (ar < samp_lens.unsqueeze(1)).to(uniq_lp.dtype)
                 seq_logp = (uniq_lp * mask).sum(dim=1) 
 
-                if length_norm:
-                    log_score = seq_logp + samp_lens.to(seq_logp.dtype)
-                else:
-                    log_score = seq_logp
-
-                log_score_np = log_score.numpy()
+                log_score_np = seq_logp.numpy()
                 m = log_score_np.max()
                 w = np.exp(log_score_np - m).astype(np.float32)
                 w = w / (w.sum() + 1e-8) 
