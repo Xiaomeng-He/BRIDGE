@@ -41,12 +41,6 @@ BRIDGE is implemented by **`bridge(...)`**. The method supports the following co
   - `top-k` (if `top-k` is used, specify the value of `k` using `k=...`)  
   - `top-p` (if `top-p` is used, specify the value of `p` using `p=...`)
 
-When `estimator='model_based'`, the following option also applies:
-
-- **Length normalization (`length_norm`)**:
-  - `False` (default; used in the paper): disable length normalization  
-  - `True`: enable length normalization
-
 ## Reimplemented Suffix Prediction Models
   
 The following table lists the reimplemented suffix prediction models, with the code locations in this repository and links to the original papers and repositories.
