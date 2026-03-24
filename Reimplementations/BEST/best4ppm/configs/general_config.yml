@@ -1,0 +1,6 @@
+dataset: [Helpdesk, BPI2012_Full, BPI2012_W, BPI2012_C, BPI2012_WC, BPI2013_Closed, BPI2013_Incidents, EnvPermit, Sepsis, Nasa]
+model_config: exhaustive_config
+cv_folds: 1
+ncores: 1
+train_pct: 0.8 # if cv_folds: 1 train_pct specifies the percentage of cases used for training. remaining cases are the test cases
+seed: 42
