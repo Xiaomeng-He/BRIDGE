@@ -1,0 +1,49 @@
+BPIC2012:
+  file_name: 'bpic2012.csv'
+  case_identifier: 'case:concept:name'
+  activity_identifier: 'combined_activity'
+  timestamp_identifier: 'time:timestamp'
+
+BPIC2012-W:
+  file_name: 'bpic2012_W.csv'
+  case_identifier: 'case:concept:name'
+  activity_identifier: 'combined_activity'
+  timestamp_identifier: 'time:timestamp'
+
+BPIC2013:
+  file_name: 'bpic2013incidents.csv'
+  case_identifier: 'case:concept:name'
+  activity_identifier: 'combined_activity'
+  timestamp_identifier: 'time:timestamp'
+
+BPIC2017:
+  file_name: 'bpic2017.csv'
+  case_identifier: 'case:concept:name'
+  activity_identifier: 'combined_activity'
+  timestamp_identifier: 'time:timestamp'
+
+BPIC2019:
+  file_name: 'bpic2019.csv'
+  case_identifier: 'case:concept:name'
+  activity_identifier: 'concept:name'
+  timestamp_identifier: 'time:timestamp'
+
+BPIC2020:
+  file_name: 'bpic2020permit.csv'
+  case_identifier: 'case:concept:name'
+  activity_identifier: 'concept:name'
+  timestamp_identifier: 'time:timestamp'
+
+Sepsis:
+  file_name: 'sepsis.csv'
+  case_identifier: 'case:concept:name'
+  activity_identifier: 'concept:name'
+  timestamp_identifier: 'time:timestamp'
+
+Nasa: 
+  file_name: 'nasa.csv'
+  case_identifier: 'case:concept:name'
+  activity_identifier: 'concept:name'
+  timestamp_identifier: 'time:timestamp'
+
+
