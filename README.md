@@ -21,12 +21,13 @@ The repository includes the following materials:
 
 ## BRIDGE Configuration
 
-BRIDGE can be implemented using two methods, depending on the estimator used to compute Bayes risk:
+Use **`bridge(...)`** to implement BRIDGE.
 
-- **`mc_bridge(...)`**: BRIDGE with the Monte Carlo estimator
-- **`mb_bridge(...)`**: BRIDGE with the model-based estimator
+The method supports the following configuration options:
 
-Choose the method according to the estimator you want to use. Both methods share the following configuration options:
+- **Estimator (`estimator`)**: determines how Bayes risk is estimated.
+  - `'MC'`: Monte Carlo estimator
+  - `'model_based'`: model-based estimator
 
 - **Candidate/reference separation (`diff`)**: controls whether the candidate set and reference set are the same.  
   - `False` (default; used in the paper): the candidate set and reference set are identical  
@@ -42,7 +43,7 @@ Choose the method according to the estimator you want to use. Both methods share
   - `top-k` (if `top-k` is used, specify the value of `k` using `k=...`)  
   - `top-p` (if `top-p` is used, specify the value of `p` using `p=...`)
 
-The model-based method **`mb_bridge(...)`** also includes:
+When `estimator='model_based'`, the following option is also available:
 
 - **Length normalization (`length_norm`)**:
   - `False` (default; used in the paper): disable length normalization  
