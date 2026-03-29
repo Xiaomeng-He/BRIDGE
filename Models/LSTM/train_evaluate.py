@@ -72,7 +72,7 @@ def validate(model,
             nume_prefix = nume_prefix.float().to(device)
 
             # run a forward pass and obtain predictions
-            act_logits, pred_list, pred_len = model.greedy(cate_prefix, nume_prefix, dec_input_act)
+            act_logits, pred_list, pred_len = model.argmax(cate_prefix, nume_prefix, dec_input_act)
 
             # ensure predictions are stored in device
             act_logits = act_logits.to(device)
@@ -138,14 +138,14 @@ def evaluate(model,
                                                 k=bridge_sampling_k,
                                                 p=bridge_sampling_p)
             elif decoding == 'argmax':
-                _, pred_list, pred_len = model.greedy(cate_prefix, nume_prefix, dec_input_act)
+                _, pred_list, pred_len = model.argmax(cate_prefix, nume_prefix, dec_input_act)
             
             elif decoding == 'beam_search':
                 pred_list, pred_len = model.beam_search(cate_prefix, nume_prefix, dec_input_act,
                                                 beam_width=beam_width)
                 
             elif decoding == 'top_p':
-                pred_list, pred_len = model.nucleus_sampler(cate_prefix, nume_prefix, dec_input_act, 
+                pred_list, pred_len = model.top_p_sampler(cate_prefix, nume_prefix, dec_input_act, 
                                                             p=p)
 
             elif decoding == 'd_action':
