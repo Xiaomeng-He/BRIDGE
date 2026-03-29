@@ -25,7 +25,6 @@ def fit_evaluate_Markov(dataset_name,
 
     log_info = read_config(dir / "log_info.yml")
     suffix_len = log_info["max_case_len"] + 1
-    print('suffix_len:', suffix_len)
     num_act = log_info["num_act"]
 
     # load data
