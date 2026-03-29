@@ -1,0 +1,45 @@
+NASA: 
+  hidden_size: 32
+  dropout: 0
+  num_layers: 1
+
+Sepsis:
+  hidden_size: 128
+  dropout: 0
+  num_layers: 1
+
+BPIC12:
+  hidden_size: 128
+  dropout: 0.2
+  num_layers: 2
+
+BPIC12-W:
+  hidden_size: 128
+  dropout: 0.2
+  num_layers: 4
+
+BPIC13:
+  hidden_size: 128
+  dropout: 0
+  num_layers: 1
+
+BPIC17:
+  hidden_size: 128
+  dropout: 0.2
+  num_layers: 4
+
+BPIC19:
+  hidden_size: 128
+  dropout: 0.2
+  num_layers: 2
+
+BPIC20:
+  hidden_size: 64
+  dropout: 0
+  num_layers: 1
+
+
+
+
+
+
