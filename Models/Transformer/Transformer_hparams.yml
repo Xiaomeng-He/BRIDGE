@@ -1,0 +1,39 @@
+NASA: 
+  num_heads: 4
+  d_ff: 128
+  num_layers: 2
+
+Sepsis:
+  num_heads: 4
+  d_ff: 128
+  num_layers: 4
+
+BPIC12:
+  num_heads: 8
+  d_ff: 128
+  num_layers: 4
+
+BPIC12-W:
+  num_heads: 8
+  d_ff: 128
+  num_layers: 4
+
+BPIC13:
+  num_heads: 4
+  d_ff: 128
+  num_layers: 2
+
+BPIC17:
+  num_heads: 8
+  d_ff: 128
+  num_layers: 4
+
+BPIC19:
+  num_heads: 4
+  d_ff: 64
+  num_layers: 4
+
+BPIC20:
+  num_heads: 8
+  d_ff: 128
+  num_layers: 2
