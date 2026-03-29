@@ -74,7 +74,7 @@ class MarkovModel:
         sampling = "random",
         k = 10,
         p = 0.9,
-        diff = False
+        diff = False,
         eoc_id = 3,
         banned_ids=(0, 2),    
     ):
