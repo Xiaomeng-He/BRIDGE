@@ -1,0 +1,113 @@
+NASA: 
+  file_name: 'nasa.csv'
+  case_id: 'case:concept:name'
+  event_name: 'concept:name'
+  timestamp: 'time:timestamp'
+  case_len_quantile: 1.0
+  split_mode: 'strict'
+  cat_event_feature: ['apploc:filename', 'apploc:linenr', 'lifecycle:transition', 
+                     'apploc:etype', 'apprun:excatchtype', 'apprun:exthrowtype']
+  cat_case_feature: []
+  num_event_feature: []
+  num_case_feature: []
+
+Sepsis:
+  file_name: 'sepsis.csv'
+  case_id: 'case:concept:name'
+  event_name: 'concept:name'
+  timestamp: 'time:timestamp'
+  split_mode: 'strict'
+  case_len_quantile: 1.0
+  cat_event_feature: ['InfectionSuspected', 'org:group', 'DiagnosticBlood', 'DisfuncOrg', 
+        'SIRSCritTachypnea', 'Hypotensie', 'SIRSCritHeartRate', 'Infusion',
+        'DiagnosticArtAstrup', 'DiagnosticIC', 'DiagnosticSputum', 'DiagnosticLiquor', 
+        'DiagnosticOther','SIRSCriteria2OrMore', 'DiagnosticXthorax', 'SIRSCritTemperature',
+       'DiagnosticUrinaryCulture', 'SIRSCritLeucos', 'Oligurie', 'DiagnosticLacticAcid', 
+       'Diagnose','Hypoxie', 'DiagnosticUrinarySediment', 'DiagnosticECG']
+  cat_case_feature: []
+  num_event_feature: ['Age', 'Leucocytes', 'CRP', 'LacticAcid']
+  num_case_feature: []
+
+BPIC12:
+  file_name: 'bpic2012.zip'
+  case_id: 'case:concept:name'
+  event_name: 'combined_activity'
+  timestamp: 'time:timestamp'
+  split_mode: 'strict'
+  case_len_quantile: 1.0
+  cat_event_feature: ['org:resource', 'lifecycle:transition']
+  cat_case_feature: []
+  num_event_feature: []
+  num_case_feature: ['case:AMOUNT_REQ']
+
+BPIC12-W:
+  file_name: 'bpic2012_W.csv'
+  case_id: 'case:concept:name'
+  event_name: 'combined_activity'
+  timestamp: 'time:timestamp'
+  split_mode: 'strict'
+  case_len_quantile: 1.0
+  cat_event_feature: ['org:resource', 'lifecycle:transition']
+  cat_case_feature: []
+  num_event_feature: []
+  num_case_feature: ['case:AMOUNT_REQ']
+
+BPIC13:
+  file_name: 'bpic2013incidents.csv'
+  case_id: 'case:concept:name'
+  event_name: 'combined_activity'
+  timestamp: 'time:timestamp'
+  split_mode: 'workaround'
+  case_len_quantile: 1.0
+  cat_event_feature: ['org:group','resource country','organization country', 'org:resource',
+                'organization involved','org:role','lifecycle:transition']
+  cat_case_feature: ['impact','product']
+  num_event_feature: []
+  num_case_feature: []
+
+BPIC17:
+  file_name: 'bpic2017.zip'
+  case_id: 'case:concept:name'
+  event_name: 'combined_activity'
+  timestamp: 'time:timestamp'
+  split_mode: 'strict'
+  case_len_quantile: 1.0
+  cat_event_feature: ['Action', 'org:resource', 'EventOrigin', 
+                    'Accepted', 'Selected']
+  cat_case_feature: ['case:LoanGoal', 'case:ApplicationType', 'lifecycle:transition']
+  num_event_feature: ['FirstWithdrawalAmount', 'NumberOfTerms', 'MonthlyCost', 'CreditScore',
+                    'OfferedAmount']
+  num_case_feature: ['case:RequestedAmount']
+
+BPIC19:
+  file_name: 'bpic2019.zip'
+  case_id: 'case:concept:name'
+  event_name: 'concept:name'
+  timestamp: 'time:timestamp'
+  split_mode: 'workaround'
+  case_len_quantile: 0.99
+  cat_event_feature: ['org:resource']
+  cat_case_feature: ['case:Spend area text', 'case:Company', 'case:Document Type', 
+                    'case:Sub spend area text','case:Vendor', 'case:Item Type', 
+                    'case:Item Category', 'case:Spend classification text', 'case:Name',
+                    'case:GR-Based Inv. Verif.', 'case:Goods Receipt']
+  num_event_feature: ['Cumulative net worth (EUR)']
+  num_case_feature: []
+
+BPIC20:
+  file_name: 'bpic2020permit.zip'
+  case_id: 'case:concept:name'
+  event_name: 'concept:name'
+  timestamp: 'time:timestamp'
+  split_mode: 'workaround'
+  case_len_quantile: 1.0
+  cat_event_feature: ['org:resource', 'org:role']
+  cat_case_feature: ['case:OrganizationalEntity', 'case:Overspent']
+  num_event_feature: []
+  num_case_feature: ['case:TotalDeclared', 'case:RequestedBudget', 'case:OverspentAmount']
+
+
+
+
+
+
