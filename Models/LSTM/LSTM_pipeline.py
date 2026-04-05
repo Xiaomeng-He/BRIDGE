@@ -149,9 +149,6 @@ def train_evaluate_LSTM(dataset_name,
                                               bridge_sampling_k=bridge_sampling_k,
                                               beam_width=beam_width,
                                               p=p)
-    
-    print('DL distance on test set:', test_dl_distance)
-    print('Length MAE on test set:', test_mae_len)
 
     return test_dl_distance, test_mae_len
 
