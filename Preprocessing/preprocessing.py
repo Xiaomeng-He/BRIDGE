@@ -49,7 +49,6 @@ def debiasing(orn_df,
     df_agg['tpt'] = df_agg['tpt']/(24 *3600)
     max_duration = df_agg["tpt"].quantile(0.75)
     max_len = int(df_agg["case_len"].quantile(case_len_quantile))
-    print(f"Max duration is: {max_duration:.2f} days")
     del (df)
     
     df = orn_df.copy()
