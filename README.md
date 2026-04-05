@@ -29,7 +29,7 @@ Run an experiment with:
 python main.py
 ```
 
-By default, this runs an experiment on the `NASA` dataset using the `Markov` model with `bridge` decoding. All experiment settings are defined in `ExperimentConfig` in `main.py`. You can modify the configuration by changing the corresponding fields in `ExperimentConfig`.
+By default, this runs an experiment on the `NASA` dataset using the `Markov` model with `bridge` decoding. You can modify the configuration by changing the corresponding fields in `ExperimentConfig`.
 
 ### BRIDGE Configuration
 
