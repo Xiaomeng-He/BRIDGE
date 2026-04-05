@@ -19,9 +19,27 @@ The repository includes the following materials:
 
 - **Data**:  Datasets used in the paper.
 
-## BRIDGE Configuration
+## Run Experiments
 
-BRIDGE is implemented by **`bridge(...)`**. The method supports the following configuration options:
+### Quick start
+
+Run an experiment with:
+
+```bash
+python main.py
+```
+
+By default, this runs an experiment on the `NASA` dataset using the `Markov` model with `bridge` decoding. All experiment settings are defined in `ExperimentConfig` in `main.py`. You can modify the configuration by changing the corresponding fields in `ExperimentConfig`.
+
+### BRIDGE Configuration
+
+To use BRIDGE as the decoding strategy, set:
+
+```python
+decoding = "bridge"
+```
+
+Supported BRIDGE parameters:
 
 - **Estimator (`estimator`)**: determines how Bayes risk is estimated.
   - `'MC'`: Monte Carlo estimator
@@ -36,10 +54,29 @@ BRIDGE is implemented by **`bridge(...)`**. The method supports the following co
   - `n_candidate`: size of the candidate set  
   - If `diff=False`, then `n_sample` must equal `n_candidate`.
 
-- **Sampling method (`sampling`)**: controls how suffixes in candidate set are generated.  
+- **Sampling method (`bridge_sampling`)**: controls how suffixes in candidate set are generated.  
   - `random` (default; used in the paper)  
-  - `top-k` (if `top-k` is used, specify the value of `k` using `k=...`)  
-  - `top-p` (if `top-p` is used, specify the value of `p` using `p=...`)
+  - `top-k` (if `top-k` is used, specify the value of `k` using `bridge_sampling_k=...`)  
+  - `top-p` (if `top-p` is used, specify the value of `p` using `bridge_sampling_p=...`)
+
+Example:
+
+```python
+config = ExperimentConfig(
+    model="LSTM",
+    dataset_name="BPIC13",
+    decoding="bridge",
+    estimator='model_based',
+    n_candidate=50,
+    n_sample=50,
+    bridge_sampling="random",
+)
+```
+
+### Other Decoding Parameters
+
+- `beam_width`: used only when `decoding="beam_search"`
+- `p`: used only when `decoding="top_p"`
 
 ## Reimplemented Suffix Prediction Models
   
