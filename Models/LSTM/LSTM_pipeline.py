@@ -138,6 +138,7 @@ def train_evaluate_LSTM(dataset_name,
 
     test_dl_distance, test_mae_len = evaluate(model,
                                               test_dataloader,
+                                              device,
                                               decoding=decoding,
                                               estimator=estimator,
                                               n_candidate=n_candidate,
