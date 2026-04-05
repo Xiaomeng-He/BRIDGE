@@ -3,7 +3,7 @@ This is the official repository for the paper **"BRIDGE: A Bayes-Risk-Informed P
 
 The repository includes the following materials:
 
-- **Models**:  Code implementing **BRIDGE** and other baseline decoding strategies, including Argmax decoding, Beam Search, Top-k sampling, and the Daemon Action method, for:
+- **Models**:  Code implementing **BRIDGE** and other baseline decoding strategies, including Argmax decoding, Beam Search, Top-p sampling, and the Daemon Action method, for:
   - Markov models
   - encoder-decoder LSTM
   - encoder-decoder Transformer
