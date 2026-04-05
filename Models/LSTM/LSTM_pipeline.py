@@ -6,8 +6,8 @@ from torch.utils.data import TensorDataset, DataLoader
 from pathlib import Path
 import csv
 
-from create_LSTM import ED_LSTM
-from train_evaluate import training_trial, init_weights_uni, evaluate
+from .create_LSTM import ED_LSTM
+from .train_evaluate import training_trial, init_weights_uni, evaluate
 from Models.utils import read_config, set_seed
 
 def train_evaluate_LSTM(dataset_name,
