@@ -3,8 +3,8 @@ import pandas as pd
 import torch
 from torch.utils.data import TensorDataset, DataLoader
 from pathlib import Path
-from create_Markov import MarkovModel
-from evaluate import evaluate
+from .create_Markov import MarkovModel
+from .evaluate import evaluate
 from Models.utils import read_config, set_seed
 
 def fit_evaluate_Markov(dataset_name,
@@ -25,6 +25,7 @@ def fit_evaluate_Markov(dataset_name,
 
     log_info = read_config(dir / "log_info.yml")
     suffix_len = log_info["max_case_len"] + 1
+    print('suffix_len:', suffix_len)
     num_act = log_info["num_act"]
 
     # load data
@@ -32,10 +33,10 @@ def fit_evaluate_Markov(dataset_name,
     train_act_suffix_path = tensor_dir / "train_act_suffix.pt"
 
     val_cate_prefix_path = tensor_dir / "val_cate_prefix_l.pt"
-    val_act_suffix_path = tensor_dir / "val_cate_prefix_l.pt"
+    val_act_suffix_path = tensor_dir / "val_act_suffix.pt"
 
     test_cate_prefix_path = tensor_dir / "test_cate_prefix_l.pt"
-    test_act_suffix_path = tensor_dir / "test_cate_prefix_l.pt"
+    test_act_suffix_path = tensor_dir / "test_act_suffix.pt"
 
     train_cate_prefix = torch.load(train_cate_prefix_path)
     train_act_suffix = torch.load(train_act_suffix_path)
