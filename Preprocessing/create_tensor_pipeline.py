@@ -3,13 +3,13 @@ import yaml
 import pandas as pd
 import numpy as np
 import torch
-from preprocessing import clean_log, sort_log, debiasing, map_case_id, \
+from .preprocessing import clean_log, sort_log, debiasing, map_case_id, \
     add_soc_eoc, create_time_features, fill_missing, standardize,\
     map_event_name, map_cat_feature
-from train_test_split import get_train_test_split_point, \
+from .train_test_split import get_train_test_split_point, \
     create_table_without_discard_case, get_case_list_by_ratio
-from create_prefix_suffix import create_trace_prefix, create_trace_suffix
-from utils import read_config, read_data_file
+from .create_prefix_suffix import create_trace_prefix, create_trace_suffix
+from .utils import read_config, read_data_file
 
 def create_tensors(dataset_name,
                    test_ratio=0.2,
@@ -39,13 +39,13 @@ def create_tensors(dataset_name,
     cat_features = cat_event_feature + cat_case_feature # used for categorical feature mapping
     numerical_features = time_feature + num_event_feature + num_case_feature
 
-    case_len_quantile = dataset_cfg["max_case_len_quantile"]
+    case_len_quantile = dataset_cfg["case_len_quantile"]
     split_mode = dataset_cfg["split_mode"]
 
     # read event log
     file_name = dataset_cfg["file_name"]
     orn_df = read_data_file(BASE_DIR.parent / "Data" / file_name)
-    df = orn_df.copy
+    df = orn_df.copy()
 
     log_info = {}
 
