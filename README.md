@@ -21,6 +21,22 @@ The repository includes the following materials:
 
 ## Run Experiments
 
+### Installation
+
+Create a virtual environment and install the required dependencies:
+
+```bash
+python -m venv bridge-env
+
+# Linux / macOS
+source bridge-env/bin/activate
+
+# Windows
+bridge-env\Scripts\activate
+
+pip install -r requirements.txt
+```
+
 ### Quick start
 
 Run an experiment with:
