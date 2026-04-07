@@ -1,6 +1,7 @@
-The following table reports the Damerau–Levenshtein distance (means and standard deviations) of BRIDGE and a re-ranking method that samples 50 suffixes 
-and ranks them by likelihood (referred to as **Prob-Rank**). BRIDGE outperforms Prob-Rank, indicating that the performance gain cannot be attributed 
-solely to the use of more random samples; instead, Bayes-risk-informed ranking plays a critical role.
+The following table reports the Damerau–Levenshtein distance (means and standard deviations) of BRIDGE and a re-ranking method that samples 50 suffixes, 
+ranks them by likelihood, and selects the highest-likelihood candidate as the final prediction (referred to as **Prob-Rank**). 
+BRIDGE outperforms Prob-Rank, indicating that the performance gain cannot be attributed solely to the use of more random samples; 
+instead, Bayes-risk-informed ranking plays a critical role.
 
 |                   | Markov          |                 | LSTM            |                 | Transformer     |                 |
 |-------------------|-----------------|-----------------|-----------------|-----------------|-----------------|-----------------|
